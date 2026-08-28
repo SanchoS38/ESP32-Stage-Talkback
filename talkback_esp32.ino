@@ -1,7 +1,7 @@
 /*
    ESP32 Stage-Talkback / Switched Mic + Battery Level Monitor
-   Логіка: При натисканні глушить Main (FOH) та обрані шини (Bus).
-   Всі символи кирилиці передаються в UTF-8.
+   Logic: On press, mutes Main (FOH) and selected buses (Bus).
+   All UTF-8 characters are supported.
 */
 
 #include <WiFi.h>
@@ -12,7 +12,7 @@
 #include <Adafruit_NeoPixel.h>
 #include <ESPmDNS.h>
 
-// ---------- НАЛАШТУВАННЯ СВІТЛОДІОДІВ (RGBW) ----------
+// ---------- LED SETTINGS (RGBW) ----------
 #define LED_PIN      15     
 #define NUM_LEDS     3      
 
@@ -20,14 +20,14 @@ Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRBW + NEO_KHZ800);
 
 const uint32_t COLOR_OFF = strip.Color(0, 0, 0, 0);
 
-// ---------- ПІНИ ГАРДВЕРА ----------
+// ---------- HARDWARE PINS ----------
 const int buttonPin = 4;    
 const int resetPin  = 16;   
-#define BATTERY_PIN 34   // Аналоговий пін ADC для дільника 10k + 10k
-#define ADC_MAX 4095.0  // 12-бітний АЦП ESP32
-#define V_REF 3.65       // Опорна напруга АЦП
+#define BATTERY_PIN 34   // ADC pin for 10k + 10k voltage divider
+#define ADC_MAX 4095.0  // 12-bit ESP32 ADC resolution
+#define V_REF 3.65       // ADC Reference Voltage
 
-// ---------- ПЕРЕЛІК МІКШЕРНИХ ПУЛЬТІВ ----------
+// ---------- MIXER MODELS LIST ----------
 enum MixerModel {
   MIXER_X32 = 0,        
   MIXER_XAIR = 1,       
@@ -38,7 +38,7 @@ enum MixerModel {
   MIXER_SOUNDCRAFT = 6  
 };
 
-// ---------- МОВНІ ПЕРЕКЛАДИ ----------
+// ---------- LANGUAGE TRANSLATIONS ----------
 enum Language { LANG_EN = 0, LANG_DE = 1, LANG_UA = 2, LANG_RU = 3 };
 int currentLang = LANG_UA;
 
@@ -98,7 +98,7 @@ const Translations txt[] = {
   }
 };
 
-// ---------- МЕНЕДЖЕР НАЛАШТУВАНЬ ----------
+// ---------- SETTINGS MANAGER ----------
 Preferences preferences;
 
 String wifi_ssid = "";
@@ -110,18 +110,18 @@ int button_mode = 0;
 int led_brightness = 30; 
 bool bus_mute_flags[16] = {0};
 
-// Мережеві налаштування
+// Network Configuration
 bool use_static_ip = false;
 String static_ip_str = "";
 String gateway_str = "";
 String subnet_str = "255.255.255.0";
 String mdns_name = "talkback";
 
-// Кастомні кольори (HEX)
+// Custom Colors (HEX)
 String color_standby_hex = "#0000FF";
 String color_active_hex  = "#00FF00";
 
-// Зворотний зв'язок з мікшером
+// Mixer Connection Feedback
 bool mixer_online = false;
 unsigned long lastPingTime = 0;
 const unsigned long pingInterval = 3000;
@@ -153,26 +153,26 @@ bool wifiWasConnected = false;
 unsigned long wifiConnectStart = 0;
 const unsigned long wifiTimeout = 20000; 
 
-// ---------- ВИМІРЮВАННЯ БАТАРЕЇ ----------
+// ---------- BATTERY MEASUREMENT ----------
 void getBatteryStatus(float &voltage, int &percentage) {
   long summV = 0;
   for (int i = 0; i < 20; i++) {
-    summV += analogReadMilliVolts(BATTERY_PIN); // Читає напругу на піні в мілівольтах
+    summV += analogReadMilliVolts(BATTERY_PIN); // Read pin voltage in millivolts
     delay(2);
   }
-  float avgVoltsOnPin = (summV / 20.0) / 1000.0; // Переводимо у Вольти
+  float avgVoltsOnPin = (summV / 20.0) / 1000.0; // Convert to Volts
 
-  // Множимо на 2.0 (через дільник 10k + 10k)
+  // Multiply by 2.0 (due to 10k + 10k divider)
   voltage = avgVoltsOnPin * 2.0; 
 
-  // Розрахунок відсотків заряду для Li-Ion (3.3V - 4.2V)
+  // Calculate Li-Ion charge percentage (3.3V - 4.2V)
   percentage = (int)(((voltage - 3.3) / (4.2 - 3.3)) * 100.0);
 
   if (percentage > 100) percentage = 100;
   if (percentage < 0) percentage = 0;
 }
 
-// ---------- ДОПОМІЖНІ ФУНКЦІЇ КОЛЬОРУ ----------
+// ---------- HELPER COLOR FUNCTIONS ----------
 uint32_t hexToColor(String hex) {
   if (hex.startsWith("#")) hex.remove(0, 1);
   long number = strtol(hex.c_str(), NULL, 16);
@@ -182,7 +182,7 @@ uint32_t hexToColor(String hex) {
   return strip.Color(r, g, b, 0);
 }
 
-// ---------- ПОРТИ ТА КІЛЬКІСТЬ ШИН ----------
+// ---------- MIXER PORTS AND BUS COUNT ----------
 int getMixerPort(int model) {
   switch (model) {
     case MIXER_X32: return 10023;
@@ -204,7 +204,7 @@ int getMaxBuses(int model) {
   }
 }
 
-// ---------- УПРАВЛІННЯ СВІТЛОДІОДАМИ ----------
+// ---------- LED CONTROL ----------
 void updateLedBrightness(int percent) {
   uint8_t scaledBrightness = map(constrain(percent, 0, 100), 0, 100, 0, 255);
   strip.setBrightness(scaledBrightness);
@@ -246,7 +246,7 @@ void updateLedState() {
   }
 }
 
-// ---------- ФУНКЦІЇ ВІДПРАВКИ OSC ТА PING ----------
+// ---------- OSC TRANSMISSION AND PING FUNCTIONS ----------
 void sendOSCFloat(const char* address, float value) {
   if (isAPMode || WiFi.status() != WL_CONNECTED || mixer_ip_str.length() == 0) return;
 
@@ -315,7 +315,7 @@ void checkMixerResponse() {
   }
 }
 
-// ---------- ЛОГІКА TALKBACK ----------
+// ---------- TALKBACK LOGIC ----------
 void setTalkback(bool active) {
   isTalkbackActive = active;
   if (channel <= 0) return; 
@@ -323,7 +323,7 @@ void setTalkback(bool active) {
   int maxBus = getMaxBuses(mixer_model);
 
   if (active) {
-    // 1. Глушимо Main FOH
+    // 1. Mute Main FOH
     if (mixer_model == MIXER_X32 || mixer_model == MIXER_WAVES) {
       char mainAddr[32];
       snprintf(mainAddr, sizeof(mainAddr), "/ch/%02d/mix/st", channel);
@@ -338,7 +338,7 @@ void setTalkback(bool active) {
       sendOSCFloat(mainAddr, 0.0f);
     }
 
-    // 2. Глушимо обрані шини (Bus)
+    // 2. Mute selected buses (Bus)
     for (int i = 0; i < maxBus; i++) {
       if (bus_mute_flags[i]) {
         char busAddr[32];
@@ -352,7 +352,7 @@ void setTalkback(bool active) {
     }
 
   } else {
-    // 1. Повертаємо Main FOH
+    // 1. Unmute Main FOH
     if (mixer_model == MIXER_X32 || mixer_model == MIXER_WAVES) {
       char mainAddr[32];
       snprintf(mainAddr, sizeof(mainAddr), "/ch/%02d/mix/st", channel);
@@ -367,7 +367,7 @@ void setTalkback(bool active) {
       sendOSCFloat(mainAddr, 1.0f);
     }
 
-    // 2. Відновлюємо посили на обрані шини
+    // 2. Unmute sends to selected buses
     for (int i = 0; i < maxBus; i++) {
       if (bus_mute_flags[i]) {
         char busAddr[32];
@@ -384,7 +384,7 @@ void setTalkback(bool active) {
   updateLedState();
 }
 
-// ---------- AJAX СТАТУС (ВКЛЮЧАЮЧИ БАТАРЕЮ) ----------
+// ---------- AJAX STATUS (INCLUDING BATTERY) ----------
 void handleApiStatus() {
   float voltage = 0.0;
   int percentage = 0;
@@ -400,7 +400,7 @@ void handleApiStatus() {
   server.send(200, "application/json; charset=utf-8", json);
 }
 
-// ---------- ВЕБ-ІНТЕРФЕЙС ----------
+// ---------- WEB INTERFACE ----------
 void handleRoot() {
   if (isAPMode && server.hostHeader() != "5.5.5.5") {
     server.sendHeader("Location", "http://5.5.5.5/", true);
@@ -433,7 +433,7 @@ void handleRoot() {
   html += ".bg-online{background:#28a745;color:#fff;} .bg-offline{background:#dc3545;color:#fff;} ";
   html += ".row-inline{display:flex;gap:10px;align-items:center;} ";
   
-  // Стилі для прогрес-бару батареї
+  // Battery progress bar styles
   html += ".battery-box{background:#222;padding:10px;border-radius:8px;margin-top:10px;} ";
   html += ".progress-bg{width:100%;background:#444;height:18px;border-radius:9px;overflow:hidden;margin-top:5px;border:1px solid #555;} ";
   html += ".progress-fill{height:100%;width:0%;background:#28a745;transition:width 0.4s, background 0.4s;} ";
@@ -466,7 +466,7 @@ void handleRoot() {
   html += "    document.getElementById('wifi-rssi').innerText = d.rssi + ' dBm';";
   html += "    document.getElementById('tb-state').innerText = d.talkback ? 'TALKBACK ACTIVE' : 'LIVE (FOH)';";
   
-  // Оновлення батареї у JS
+  // Battery status JS update
   html += "    document.getElementById('bat-pct').innerText = d.battery_pct + '%';";
   html += "    document.getElementById('bat-v').innerText = d.battery_v.toFixed(2) + ' V';";
   html += "    var bar = document.getElementById('bat-bar');";
@@ -490,9 +490,9 @@ void handleRoot() {
     html += "<p style='margin:3px 0;'><b>Mixer Link:</b> <span id='mixer-status' class='badge " + String(mixer_online ? "bg-online" : "bg-offline") + "'>" + String(mixer_online ? "ONLINE" : "OFFLINE / UNREACHABLE") + "</span></p>";
     html += "<p style='margin:3px 0;'><b>Mode:</b> <span id='tb-state'>" + String(isTalkbackActive ? "TALKBACK ACTIVE" : "LIVE (FOH)") + "</span></p>";
     
-    // Блок батареї у Веб-інтерфейсі
+    // Battery Box in Web UI
     html += "<div class='battery-box'>";
-    html += "<div style='display:flex;justify-content:space-between;font-size:13px;'><b>Акумулятор:</b> <span id='bat-pct'>0%</span> (<span id='bat-v'>0.00 V</span>)</div>";
+    html += "<div style='display:flex;justify-content:space-between;font-size:13px;'><b>Battery:</b> <span id='bat-pct'>0%</span> (<span id='bat-v'>0.00 V</span>)</div>";
     html += "<div class='progress-bg'><div id='bat-bar' class='progress-fill'></div></div>";
     html += "</div>";
 
@@ -502,7 +502,7 @@ void handleRoot() {
 
   html += "<form action='/save' method='POST'>";
 
-  // Мова
+  // Language
   html += "<label>" + String(t.selectLang) + "</label><select name='lang'>";
   html += "<option value='0'" + String(currentLang == LANG_EN ? " selected" : "") + ">English</option>";
   html += "<option value='1'" + String(currentLang == LANG_DE ? " selected" : "") + ">Deutsch</option>";
@@ -527,7 +527,7 @@ void handleRoot() {
   html += "<button type='button' id='toggle-btn' class='toggle-btn' onclick='togglePass()'>🔒</button>";
   html += "</div>";
 
-  // mDNS та Static IP
+  // mDNS and Static IP
   html += "<label>mDNS Hostname (.local)</label>";
   html += "<input type='text' name='mdns' value='" + mdns_name + "' placeholder='talkback'>";
 
@@ -541,7 +541,7 @@ void handleRoot() {
   html += "<label>Subnet Mask</label><input type='text' name='subnet' placeholder='255.255.255.0' value='" + subnet_str + "'>";
   html += "</div>";
 
-  // Мікшер
+  // Mixer
   html += "<label>" + String(t.mixerModelLabel) + "</label>";
   html += "<select name='model' id='mixer-select' onchange='updateBusGrid()'>";
   html += "<option value='0'" + String(mixer_model == MIXER_X32 ? " selected" : "") + ">Behringer X32 / Midas M32</option>";
@@ -560,26 +560,26 @@ void handleRoot() {
   html += "<label>" + String(t.channel) + "</label>";
   html += "<input type='number' name='channel' min='1' max='32' placeholder='1-32' value='" + channelVal + "'>";
 
-  // Режим кнопки
+  // Button Mode
   html += "<label>" + String(t.btnModeLabel) + "</label><select name='btnmode'>";
   html += "<option value='0'" + String(button_mode == 0 ? " selected" : "") + ">" + String(t.btnModePTT) + "</option>";
   html += "<option value='1'" + String(button_mode == 1 ? " selected" : "") + ">" + String(t.btnModeLatch) + "</option>";
   html += "</select>";
 
-  // Яскравість
+  // Brightness
   html += "<label>" + String(t.ledBrightnessLabel) + "</label>";
   html += "<div class='range-container'>";
   html += "<input type='range' name='brightness' min='0' max='100' value='" + String(led_brightness) + "' oninput='updateBrightVal(this.value)'>";
   html += "<span id='bright-val' class='range-val'>" + String(led_brightness) + "%</span>";
   html += "</div>";
 
-  // Кольори
+  // Colors
   html += "<div class='row-inline'>";
   html += "<div style='flex:1;'><label>Standby (FOH Live)</label><input type='color' name='col_standby' value='" + color_standby_hex + "'></div>";
   html += "<div style='flex:1;'><label>Active (Talkback)</label><input type='color' name='col_active' value='" + color_active_hex + "'></div>";
   html += "</div>";
 
-  // Сітка шин ДЛЯ ЗАГЛУШЕННЯ
+  // Bus Mute Grid
   html += "<label><b>" + String(t.busSelectTitle) + "</b></label>";
   html += "<div class='bus-grid'>";
   for (int i = 0; i < 16; i++) {
@@ -599,7 +599,7 @@ void handleRoot() {
   server.send(200, "text/html; charset=utf-8", html);
 }
 
-// ---------- ЗБЕРЕЖЕННЯ НАЛАШТУВАНЬ ТА РЕДИРЕКТ ----------
+// ---------- SAVE SETTINGS AND REDIRECT ----------
 void handleSave() {
   String selected_ssid = server.arg("ssid");
   String manual_ssid = server.arg("manual_ssid");
@@ -658,7 +658,7 @@ void handleSave() {
   String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
   html += "<meta http-equiv='refresh' content='2;url=/'>";
   html += "</head><body style='background:#1a1a1a;color:#fff;font-family:Arial;text-align:center;padding-top:50px;'>";
-  html += "<h2>" + String(t.msgSaved) + "</h2><p>Перенаправлення на головну сторінку...</p></body></html>";
+  html += "<h2>" + String(t.msgSaved) + "</h2><p>Redirecting to home page...</p></body></html>";
   
   server.send(200, "text/html; charset=utf-8", html);
 
@@ -666,7 +666,7 @@ void handleSave() {
   ESP.restart();
 }
 
-// ---------- ТОЧКА ДОСТУПУ ТА МАРШРУТИ ----------
+// ---------- ACCESS POINT MODE & ROUTES ----------
 void startAPMode() {
   isAPMode = true;
   WiFi.mode(WIFI_AP);
@@ -740,7 +740,7 @@ void setup() {
   pinMode(buttonPin, INPUT_PULLUP);
   pinMode(resetPin, INPUT_PULLUP);
 
-  analogReadResolution(12); // Налаштування 12-бітного розділення АЦП
+  analogReadResolution(12); // Set 12-bit ADC resolution
   analogSetAttenuation(ADC_11db);
 
   preferences.begin("settings", true);
@@ -802,7 +802,7 @@ void setup() {
 
 // ---------- LOOP ----------
 void loop() {
-  // 1. Reset Pin (Скинути налаштування утримуванням 3 сек)
+  // 1. Reset Pin (Reset settings by holding for 3 seconds)
   if (digitalRead(resetPin) == LOW) {
     if (resetHoldStart == 0) {
       resetHoldStart = millis();
@@ -838,11 +838,11 @@ void loop() {
   // 4. Web Server
   server.handleClient();
 
-  // 5. Перевірка відповіді від пульта
+  // 5. Mixer Connection Check
   checkMixerResponse();
   updateLedState();
 
-  // 6. Логіка кнопки
+  // 6. Button Logic
   if (WiFi.status() == WL_CONNECTED) {
     bool reading = digitalRead(buttonPin);
 
